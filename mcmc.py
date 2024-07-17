@@ -7,7 +7,6 @@ Created on Tue Jul 16 17:50:33 2024
 """
 
 # %%
-import torch
 import pandas as pd
 import numpy as np
 from scipy.spatial import distance
@@ -43,10 +42,10 @@ def multi(z, mu, sigma):
 
 
 def getLikelihood(z, X, b, lam, cov, q1, r1):
-    # %time p1 = stat.multivariate_normal.logpdf(
-    #     z.reshape(-1), mean=(X@b).reshape(-1), cov=cov)
+    p1 = stat.multivariate_normal.logpdf(
+        z.reshape(-1), mean=(X@b).reshape(-1), cov=cov)
 
-    p1 = multi(z, X@b, cov)
+    # p1 = multi(z, X@b, cov)
 
     p2 = stat.invgamma.logpdf(lam, a=q1, scale=r1)
     return p1 + p2
@@ -55,36 +54,69 @@ def getLikelihood(z, X, b, lam, cov, q1, r1):
 # %% generate syntetic data
 
 
+# coords = np.arange(1, 101, step=1).reshape(-1, 1)
+# n = coords.shape[0]
+
+# synth = {}
+# synth['s2'] = 10
+# synth['tau2'] = 5
+# synth['lambda'] = synth['tau2']/synth['s2']
+# synth['B'] = np.array([3, -0.7, 0.01]).reshape(-1, 1)
+
+# X = np.hstack((np.ones(shape=(n, 1)), coords, coords**2))
+# K = (1 + dist / 5) * np.exp(-dist / 5)
+
+# dist = distance.cdist(coords, coords)
+# csigma = np.linalg.cholesky(K)  # get the lower triangular
+
+# yTrue = X @ synth['B'] + csigma @ np.random.normal(0, synth['s2'], size=(n, 1))
+# z = yTrue + np.random.normal(0, synth['tau2'], size=(n, 1))
+
+# # plot
+# fig, ax = plt.subplots()
+# ax.plot(yTrue, '--')
+# ax.plot(z, 'o')
+
+# %%
+df = pd.read_csv('df.csv')
+
+n = df.shape[0]
+
 coords = np.arange(1, 101, step=1).reshape(-1, 1)
-n = coords.shape[0]
+# n = coords.shape[0]
+dist = distance.cdist(coords, coords)
 
 synth = {}
 synth['s2'] = 10
-synth['tau2'] = 5
+synth['tau2'] = 2
 synth['lambda'] = synth['tau2']/synth['s2']
 synth['B'] = np.array([3, -0.7, 0.01]).reshape(-1, 1)
 
-X = np.hstack((np.ones(shape=(n, 1)), coords, coords**2))
+# X = np.hstack((np.ones(shape=(n, 1)), coords, coords**2))
+
 K = (1 + dist / 5) * np.exp(-dist / 5)
 
-dist = distance.cdist(coords, coords)
-csigma = np.linalg.cholesky(K)  # get the lower triangular
+# generate syntetic data
 
-yTrue = X @ synth['B'] + csigma @ np.random.normal(0, synth['s2'], size=(n, 1))
-z = yTrue + np.random.normal(0, synth['tau2'], size=(n, 1))
+# csigma = np.linalg.cholesky(sigma)  # get the lower triangular
 
-# plot
-fig, ax = plt.subplots()
-ax.plot(yTrue, '--')
-ax.plot(z, 'o')
+# yTrue = X @ synth['B'] + csigma @ np.random.normal(0, synth['s2'], size=(n, 1))
+# yObs = yTrue + np.random.normal(0, synth['tau2'], size=(n, 1))
 
+# # plot
+# fig, ax = plt.subplots()
+# ax.plot(yTrue, '--')
+# ax.plot(yObs, 'o')
+
+
+z = df['z'].to_numpy().reshape(-1, 1)
+X = df[['V1', 'x', 'V3']].to_numpy()
 
 # %%  chain properties
 
 chain = {}
 chain['len'] = 10000
-chain['burnin'] = 100
-chain['boot'] = 1
+chain['burnin'] = 5000
 
 
 # %% estimate model parameter
@@ -121,7 +153,7 @@ def estimateMH():
 
         # sample form multivariate normal
         invA = np.linalg.inv(A)
-        beta = np.random.multivariate_normal((invA @ b).reshape(-1), invA)
+        beta = np.random.multivariate_normal(( @ b).reshape(-1), invA)
         beta = beta.reshape(-1, 1)
 
         # propose a new value sigma2
@@ -133,7 +165,7 @@ def estimateMH():
         s2 = stat.invgamma.rvs(a=shape, scale=scale)
 
         # Propose new value of lam2
-        tun_lam = 2
+        tun_lam = 0.2
         lam_star = np.random.normal(lam, tun_lam, 1)
         cov_star = np.eye(n) * lam_star + K
 
@@ -147,9 +179,9 @@ def estimateMH():
             ratio = np.exp(m1 - m2)
 
             if (ratio > np.random.uniform()):
-                lam = lam_star
-                cov = cov_star
-                precision = np.linalg.solve(cov_star, np.eye(n))
+                lam = lam_star.copy()
+                cov = cov_star.copy()
+                precision = np.linalg.solve(cov, np.eye(n))
 
             beta_result[:, i] = beta.reshape(-1).copy()
             s2_result[i] = s2
@@ -180,29 +212,58 @@ ax[2, 1].hist(beta[0, :-1])
 
 
 beta.mean(axis=1)
-lam.mean()
-s2.mean()
+lam[chain['burnin']:].mean()
+s2[chain['burnin']:].mean()
 
 # stat.describe(lams)
 
 # %% predictions
 
+invK = np.linalg.solve(K, np.eye(n))
+
+prediction = np.zeros((n, chain['len']-chain['burnin']))
+for i in range(0, chain['len']-chain['burnin']):
+
+    p_tao2 = lam[i] * s2[i]
+    p_s2 = s2[i]
+
+    A = np.eye(n)/p_tao2 + invK/p_s2
+    b = (z - (X @ beta[:, i]).reshape(-1, 1)) / p_tao2
+
+    noise = np.random.multivariate_normal(
+        b.reshape(-1), np.linalg.solve(A, np.eye(n)))
+
+    prediction[:, i] = X@beta[:, i] + noise
+
+
+mu = prediction.mean(axis=1)
+mu_ic = np.quantile(prediction, [0.05, 0.95], axis=1)
+
+fig, ax = plt.subplots()
+ax.plot(z, 'o')
+ax.plot(mu)
+ax.plot(mu_ic[0, :], '--r')
+ax.plot(mu_ic[1, :], '--r')
+
+
 # %% Hierarchical models
 
 
-def estimateMHHierachical(z, n, psi):
+def estimateMHHierachical(z, n, psi, K):
+
+    # psi**2
+    tpsi = psi @ psi
+
+    # Kinv
+    invK = np.linalg.solve(K, np.eye(n))
 
     # set initial values
     beta = np.linalg.inv(X.T @ X) @ X.T @ z
     s2 = 1
     tao2 = 1
 
-    # define K
-    K = (1 + dist / 5) * np.exp(-dist / 5)
-    invK = np.linalg.solve(K, np.eye(n))
-
-    # psi**2
-    tpsi = psi @ psi
+    # temp
+    Xblock = np.linalg.solve(X.T @ X, np.eye(beta.shape[0])) @ X.T
 
     # firs step residual
     y = z - X@beta
@@ -219,7 +280,7 @@ def estimateMHHierachical(z, n, psi):
     s2_result = np.zeros((chain['len'], 1))
     beta_result = np.zeros((3, chain['len']))
     y_result = np.zeros((n, chain['len']))
-
+    beta_star_result = np.zeros((3, chain['len']))
     for i in range(0, chain['len']-1):
 
         # Compute the y
@@ -251,19 +312,21 @@ def estimateMHHierachical(z, n, psi):
 
         # propose a new value sigma2
         shape = n/2 + q1
-        scale = (1/2) * ypsi.T @ invK @ ypsi + r1
+        scale = (1/2) * y.T @ invK @ y + r1
         s2 = stat.invgamma.rvs(a=shape, scale=scale)
 
-        beta_result[:, i] = beta.reshape(-1).copy()
-        s2_result[i] = s2
-        tao2_result[i] = tao2
+        beta_star_result[:, i] = beta.reshape(-1).copy()
+        beta_result[:, i] = (beta - Xblock @ y).reshape(-1).copy()
+        s2_result[i] = s2.copy()
+        tao2_result[i] = tao2.copy()
         y_result[:, i] = y.reshape(-1).copy()
 
-    return beta_result, s2_result, tao2_result, y_result
+    return beta_star_result, beta_result, s2_result, tao2_result, y_result
 
 
+# %% Estimate model
 tStart = time.time()
-hie_beta, hie_s2, hie_tao2, hie_y = estimateMHHierachical(z, n, np.eye(n))
+hie_beta, hie_s2, hie_tao2, hie_y = estimateMHHierachical(z, n, np.eye(n), K)
 tEnd = time.time() - tStart
 # %% Prot the results
 
@@ -299,10 +362,11 @@ hie_beta.mean(axis=1)
 
 # %% orthogonalized model
 
-psi = X @ np.linalg.solve(X.T @ X, np.eye(X.shape[1])) @ X.T
+psi = np.eye(n) - X @ np.linalg.solve(X.T @ X, np.eye(X.shape[1])) @ X.T
 
 tStart = time.time()
-ort_beta, ort_s2, ort_tao2, ort_y = estimateMHHierachical(z, n, psi)
+ort_beta_start, ort_beta, ort_s2, ort_tao2, ort_y = estimateMHHierachical(
+    z, n, psi, K)
 tEnd = time.time() - tStart
 
 # %% plot
@@ -332,39 +396,37 @@ ax[2, 1].hist(ort_beta[2, :-1])
 ort_beta.mean(axis=1)
 
 
-# %% create
+ort_prediction = np.zeros((n, chain['len']-chain['burnin']))
+tpsi = psi @ psi
+
+for i in range(0, chain['len']-chain['burnin']):
+
+    p_tao2 = ort_tao2[i]
+    p_s2 = ort_s2[i]
+
+    tmp = X @ ort_beta[:, i] + ort_y[:, i]
+
+    A = tpsi/p_tao2 + invK/p_s2
+    b = (z - (X @ ort_beta_start[:, i]).reshape(-1, 1)) / p_tao2
+
+    # sample form multivariate normal
+    invA = np.linalg.inv(A)
+
+    y = np.random.multivariate_normal(
+        b.reshape(-1), np.linalg.solve(A, np.eye(n)))
+
+    ort_prediction[:, i] = X@ort_beta_start[:, i] + y
 
 
-calculate_ess(ort_s2)
+mu = prediction.mean(axis=1)
+mu_ic = np.quantile(prediction, [0.05, 0.95], axis=1)
 
+fig, ax = plt.subplots()
+ax.plot(z, 'o')
+ax.plot(mu)
+ax.plot(mu_ic[0, :], '--r')
+ax.plot(mu_ic[1, :], '--r')
 
-def calculate_autocorrelation(chain):
-    n = len(chain)
-    mean = np.mean(chain)
-    c0 = np.sum((chain - mean) ** 2) / n
-
-    def r(h):
-        acf = ((chain[:n - h] - mean) *
-               (chain[h:] - mean)).sum() / ((n - h) * c0)
-        return acf
-
-    x = np.arange(n)  # Avoiding lag 0 term for ESS calculation
-    acf = np.array([r(xx) for xx in x])
-    return acf
-
-
-def calculate_ess(chain):
-    acf = calculate_autocorrelation(chain)
-    ess = len(chain) / (1 + 2 * np.sum(acf[1:]))
-    return ess
-
-
-print(f'Effective Sample Size (ESS): {ess_value}')
-
-# Plotting the autocorrelation for visualization (optional)
-acf = calculate_autocorrelation(ort_s2)
-plt.plot(acf)
-plt.title('Autocorrelation Function')
-plt.xlabel('Lag')
-plt.ylabel('Autocorrelation')
-plt.show()
+fig, ax = plt.subplots()
+ax.plot(mu_ic[0, :] - mu, '--r')
+ax.plot(mu_ic[1, :] - mu, '--r')
