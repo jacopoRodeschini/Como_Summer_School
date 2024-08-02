@@ -225,23 +225,3 @@ fig.colorbar(sc)
 ax.set_title("Spatial pattern")
 
 
-# %% Compute the prediction surface (average and confident interval)
-
-# Build design matrix
-Xnew = np.vstack((np.ones(grid.shape[0]), grid[:, 0], grid[:, 1])).T
-
-prediction = np.zeros((n, chain['len']-chain['burnin']))
-tpsi = psi @ psi
-
-# Compute the precision matrix
-invK = np.linalg.inv(K)
-
-for i in range(0, chain['len']-chain['burnin']):
-
-    A = tpsi/tao2[i] + invK/s2[i]
-    b = (z - (X @ beta_start[:, i]).reshape(-1, 1)) / tao2[i]
-
-    # sample form multivariate normal
-    y = sampleMVG(b, np.linalg.solve(A, np.eye(n))).reshape(-1)
-
-    ort_prediction[:, i] = Xnew@beta_start[:, i] + y
